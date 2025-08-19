@@ -24,7 +24,7 @@ import {
 } from '@opentelemetry/semantic-conventions';
 import { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
-import type { MongoClient, MongoClientOptions, Collection } from 'mongodb';
+import type { MongoClient, MongoClientOptions, Collection, ConnectionCreatedEvent, ConnectionClosedEvent } from 'mongodb';
 
 export const DEFAULT_MONGO_HOST = '127.0.0.1';
 
@@ -55,9 +55,23 @@ export function accessCollection(
       return;
     }
     mongodb.MongoClient.connect(url, {
+      ...options,
       serverSelectionTimeoutMS: 1000,
     })
       .then((client: MongoClient) => {
+        client
+          .on('error', (error: Error) => {
+            console.error(`An error occurred. Cause: ${error.message}`);
+          })
+          .on('close', () => {
+            console.debug(`Client closed`);
+          })
+          .on('connectionCreated', (_: ConnectionCreatedEvent) => {
+            console.debug('Connection created');
+          })
+          .on('connectionClosed', (event: ConnectionClosedEvent) => {
+            console.debug(`Connection closed, reason: ${event.reason}`);
+          });
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
         resolve({ client, collection });

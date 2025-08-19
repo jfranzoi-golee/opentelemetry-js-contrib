@@ -86,11 +86,16 @@ describe('MongoDBInstrumentation-Metrics', () => {
   let client: MongoClient;
   let collection: Collection;
 
+  const IDLE_TIMEOUT_MS = 10;
+
   before(done => {
     instrumentation?.setMeterProvider(otelTestingMeterProvider);
 
     shouldTest = true;
-    accessCollection(URL, DB_NAME, COLLECTION_NAME)
+    accessCollection(
+      URL, DB_NAME, COLLECTION_NAME,
+      { minPoolSize: 1, maxPoolSize: 10, maxIdleTimeMS: IDLE_TIMEOUT_MS }
+    )
       .then(result => {
         client = result.client;
         collection = result.collection;
@@ -155,6 +160,34 @@ describe('MongoDBInstrumentation-Metrics', () => {
       dataPoints[1].attributes['pool.name'],
       `mongodb://${HOST}:${PORT}/${DB_NAME}`
     );
+  });
+
+  it('Should add disconnection usage metrics, on disconnected event', async () => {
+    await collection.deleteMany({});
+    await new Promise(resolve => setTimeout(resolve, IDLE_TIMEOUT_MS)); // ensure idle timeout has expired
+
+    await collection.deleteMany({});
+    await new Promise(resolve => setTimeout(resolve, IDLE_TIMEOUT_MS)); // again, ensure idle timeout has expired
+    
+    await collection.deleteMany({});
+    //await client.close(); // => uncomment this, to ensure 'idle' is set to 0
+
+    const exportedMetrics = await waitForNumberOfExports(
+      inMemoryMetricsExporter,
+      10 // wait for some events, to ensure last one can be taken
+    );
+
+    const dataPoints = exportedMetrics.slice(exportedMetrics.length - 1) // last event
+      .map(x => x.scopeMetrics).flat()
+      .map(x => x.metrics).flat()
+      .map(x => x.dataPoints).flat();
+
+    console.log(dataPoints);
+
+    assert.strictEqual(dataPoints[0].attributes['state'], 'used');
+    assert.strictEqual(dataPoints[0].value, 0);
+    assert.strictEqual(dataPoints[1].attributes['state'], 'idle');
+    assert.strictEqual(dataPoints[1].value, 0); // FAILING: actual value is 1
   });
 
   it('Should add disconnection usage metrics', async () => {
